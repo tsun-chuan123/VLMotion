@@ -8,7 +8,7 @@ set -euo pipefail
 # 說明:
 #   - 若第一個非 --root 的參數是數字 (0-232)，視為 ROS_DOMAIN_ID（容器名稱使用預設）
 #   - 若第一個是名稱，第二個是數字，則分別視為 容器名稱 與 ROS_DOMAIN_ID
-# 預設容器名稱: stretch3_vla_container
+# 預設容器名稱: VLPoint-inference
 
 EXEC_USER=""
 DOMAIN_ID=""
@@ -18,7 +18,7 @@ if [[ "${1-}" == "--root" ]]; then
 fi
 
 # 解析參數：支援 --root、容器名稱與數字型 ROS_DOMAIN_ID
-CONTAINER_NAME="vlpoint-inference"
+CONTAINER_NAME="VLPoint-inference"
 
 is_integer() {
   [[ "$1" =~ ^[0-9]+$ ]]
@@ -61,21 +61,21 @@ fi
 
 # 設置X11權限
 echo "設置 X11 權限..."
-# 先允許任何用戶連接到X11服務器（臨時解決方案）
-xhost +local: 2>/dev/null || true
-
-# 在容器內設置X11認證
-docker exec -u root "${CONTAINER_NAME}" bash -c '
-    # 創建root用戶的.Xauthority文件
-    if [ ! -f /root/.Xauthority ]; then
-        touch /root/.Xauthority
-        chmod 600 /root/.Xauthority
+# 为Docker创建一个可访问的X11认证文件
+XAUTH=/tmp/.docker.xauth
+if [ ! -f $XAUTH ]; then
+    xauth_list=$(xauth nlist $DISPLAY 2>/dev/null | sed -e 's/^..../ffff/')
+    if [ ! -z "$xauth_list" ]; then
+        echo $xauth_list | xauth -f $XAUTH nmerge -
+    else
+        touch $XAUTH
     fi
-    
-    # 清空現有的認證並添加新的
-    xauth remove :1 2>/dev/null || true
-    echo "'"$(xauth list | grep ":1 " | head -1)"'" | xauth merge -
-' 2>/dev/null || true
+    chmod a+r $XAUTH
+fi
+# 允许Docker容器连接到X11
+xhost +local:docker 2>/dev/null || true
+# 将认证文件复制到容器中
+docker cp $XAUTH "${CONTAINER_NAME}:/tmp/.docker.xauth" 2>/dev/null || true
 
 echo "進入容器: ${CONTAINER_NAME}"
 if [[ -n "${DOMAIN_ID}" ]]; then

@@ -1,20 +1,31 @@
 #!/usr/bin/env bash
+
 set -euo pipefail
 
-compose_file="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/docker-compose.yml"
+# 停止容器並執行 docker compose down
+# 用法：
+#   ./docker/stop.sh [容器名稱]
+# 預設容器名稱: VLPoint-inference
 
-if command -v docker >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
-  cmd=(docker compose -f "$compose_file")
-elif command -v docker-compose >/dev/null 2>&1; then
-  cmd=(docker-compose -f "$compose_file")
-else
-  echo "Error: neither 'docker compose' nor 'docker-compose' found" >&2
+CONTAINER_NAME=${1:-VLPoint-inference}
+
+if ! command -v docker >/dev/null 2>&1; then
+  echo "找不到 docker 指令，請先安裝 Docker" >&2
   exit 1
 fi
 
-"${cmd[@]}" down
-
-# Revoke local root X access if xhost exists (best-effort)
-if command -v xhost >/dev/null 2>&1; then
-  xhost -local:root >/dev/null 2>&1 || true
+# 若容器存在且正在運行則停止
+if docker ps -a --format '{{.Names}}' | grep -wq "${CONTAINER_NAME}"; then
+  if docker ps --format '{{.Names}}' | grep -wq "${CONTAINER_NAME}"; then
+    echo "停止容器：${CONTAINER_NAME}"
+    docker stop "${CONTAINER_NAME}" >/dev/null || true
+  else
+    echo "容器已是停止狀態：${CONTAINER_NAME}"
+  fi
+else
+  echo "容器不存在：${CONTAINER_NAME}"
 fi
+
+echo "執行 docker compose down（移除由 Compose 建立的容器/網路）..."
+docker compose -f docker/docker-compose.yml down
+echo "已完成 docker compose down"
