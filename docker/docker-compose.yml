@@ -1,0 +1,37 @@
+services:
+  vlpoint-inference:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: vlpoint-inference
+    hostname: vlpoint-dev
+    restart: unless-stopped
+    gpus: all
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - XDG_RUNTIME_DIR=/tmp/runtime-root
+    volumes:
+      # - ../models:/workspace/models:ro  # 模型目錄（只讀）
+      - ../:/workspace
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw  # X11 支援（如果需要）
+      - /dev/dri:/dev/dri:rw  # GPU access for hardware acceleration
+      - /dev/video0:/dev/video0:rw  # 主攝影機
+      - /dev/video1:/dev/video1:rw  # 次攝影機（如果有）
+      - /dev/video2:/dev/video2:rw  # 第三攝影機（如果有）
+      - /dev/video3:/dev/video3:rw  # 第四攝影機（如果有）
+      - /dev/video4:/dev/video4:rw  # 第五攝影機（如果有）
+      - /dev/video5:/dev/video5:rw  # 第六攝影機（如果有）
+    network_mode: "host"
+    privileged: true
+    devices:
+      - /dev/video0:/dev/video0  # 主攝影機
+      - /dev/video1:/dev/video1  # 次攝影機（可選）
+      - /dev/video2:/dev/video2  # 第三攝影機（可選）
+      - /dev/video3:/dev/video3  # 第四攝影機（可選）
+      - /dev/video4:/dev/video4  # 第五攝影機（可選）
+      - /dev/video5:/dev/video5  # 第六攝影機（可選）
+    group_add:
+      - video  # 添加到 video 群組以獲得攝影機權限
+    stdin_open: true
+    tty: true

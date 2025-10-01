@@ -1,0 +1,66 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.pytest_cache/
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.coverage
+htmlcov/
+*.cover
+.hypothesis/
+.ipynb_checkpoints
+
+# ROS2
+ros2_ws/build/
+ros2_ws/install/
+ros2_ws/log/
+*.pyc
+*.pyo
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+log/
+
+# Environment
+.env
+*.env
+
+# Docker
+*.pid
+*.sock
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+*.bak
+*.backup
+
+# Model checkpoints and data
+*.pth
+*.ckpt
+*.pt
+*.safetensors
+checkpoints/
+data/
+datasets/
+
+# OS specific
+.DS_Store
+Thumbs.db
