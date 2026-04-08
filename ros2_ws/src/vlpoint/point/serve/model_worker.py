@@ -24,6 +24,10 @@ from point.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_S
 from transformers import TextIteratorStreamer
 from threading import Thread
 
+# XAI: Attention-based explainability
+from point.serve.xai_attention import compute_attention_heatmap, render_attention_overlay, heatmap_to_text
+from fastapi.responses import JSONResponse
+
 
 GB = 1 << 30
 
@@ -32,6 +36,17 @@ logger = build_logger("model_worker", f"model_worker_{worker_id}.log")
 global_counter = 0
 
 model_semaphore = None
+
+
+def str2bool(value):
+    if isinstance(value, bool):
+        return value
+    value = value.strip().lower()
+    if value in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if value in {"0", "false", "f", "no", "n", "off"}:
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value}")
 
 
 def heart_beat_worker(controller):
@@ -45,7 +60,11 @@ class ModelWorker:
     def __init__(self, controller_addr, worker_addr,
                  worker_id, no_register,
                  model_path, model_base, model_name,
-                 load_8bit, load_4bit, device, use_flash_attn=False):
+                 load_8bit, load_4bit, device, use_flash_attn=False,
+                 mm_use_canny_edge=False,
+                 mm_canny_low_threshold=100,
+                 mm_canny_high_threshold=200,
+                 mm_canny_blend_alpha=0.2):
         self.controller_addr = controller_addr
         self.worker_addr = worker_addr
         self.worker_id = worker_id
@@ -62,14 +81,62 @@ class ModelWorker:
 
         self.device = device
         logger.info(f"Loading the model {self.model_name} on worker {worker_id} ...")
+        load_start = time.time()
         self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
             model_path, model_base, self.model_name, load_8bit, load_4bit, device=self.device, use_flash_attn=use_flash_attn)
+        load_elapsed = time.time() - load_start
+        logger.info(
+            "Model load completed in "
+            f"{load_elapsed:.2f}s ({load_elapsed / 60.0:.2f} min)"
+        )
+        self._apply_canny_runtime_config(
+            mm_use_canny_edge=mm_use_canny_edge,
+            mm_canny_low_threshold=mm_canny_low_threshold,
+            mm_canny_high_threshold=mm_canny_high_threshold,
+            mm_canny_blend_alpha=mm_canny_blend_alpha,
+        )
 
         if not no_register:
             self.register_to_controller()
             self.heart_beat_thread = threading.Thread(
                 target=heart_beat_worker, args=(self,), daemon=True)
             self.heart_beat_thread.start()
+
+    def _apply_canny_runtime_config(self, mm_use_canny_edge, mm_canny_low_threshold,
+                                    mm_canny_high_threshold, mm_canny_blend_alpha):
+        mm_canny_low_threshold = int(mm_canny_low_threshold)
+        mm_canny_high_threshold = int(mm_canny_high_threshold)
+        mm_canny_blend_alpha = float(mm_canny_blend_alpha)
+
+        if mm_canny_low_threshold >= mm_canny_high_threshold:
+            logger.warning(
+                "mm_canny_low_threshold >= mm_canny_high_threshold; swapping values. "
+                f"low={mm_canny_low_threshold}, high={mm_canny_high_threshold}"
+            )
+            mm_canny_low_threshold, mm_canny_high_threshold = (
+                mm_canny_high_threshold,
+                mm_canny_low_threshold,
+            )
+
+        self.model.config.mm_use_canny_edge = bool(mm_use_canny_edge)
+        self.model.config.mm_canny_low_threshold = mm_canny_low_threshold
+        self.model.config.mm_canny_high_threshold = mm_canny_high_threshold
+        self.model.config.mm_canny_blend_alpha = mm_canny_blend_alpha
+
+        vision_tower = self.model.get_vision_tower()
+        if vision_tower is not None:
+            vision_tower.mm_use_canny_edge = bool(mm_use_canny_edge)
+            vision_tower.mm_canny_low_threshold = mm_canny_low_threshold
+            vision_tower.mm_canny_high_threshold = mm_canny_high_threshold
+            vision_tower.mm_canny_blend_alpha = mm_canny_blend_alpha
+
+        logger.info(
+            "Canny edge conditioning config: "
+            f"enabled={bool(mm_use_canny_edge)}, "
+            f"low={mm_canny_low_threshold}, "
+            f"high={mm_canny_high_threshold}, "
+            f"alpha={mm_canny_blend_alpha}"
+        )
 
     def register_to_controller(self):
         logger.info("Register to controller")
@@ -187,9 +254,66 @@ class ModelWorker:
         generated_text = ori_prompt
         for new_text in streamer:
             generated_text += new_text
-            if generated_text.endswith(stop_str):
+            if stop_str and generated_text.endswith(stop_str):
                 generated_text = generated_text[:-len(stop_str)]
             yield json.dumps({"text": generated_text, "error_code": 0}).encode() + b"\0"
+
+    def generate_attention_heatmap(self, params: dict, generated_text: str) -> dict:
+        """
+        在 generate_stream 完成後，用同一張圖再做一次 forward pass
+        （output_attentions=True），抽取「座標 token → image patch」的
+        attention，回傳可 JSON 序列化的 dict。
+        """
+        try:
+            heatmap = compute_attention_heatmap(
+                model=self.model,
+                tokenizer=self.tokenizer,
+                image_processor=self.image_processor,
+                params=params,
+                device=self.device,
+                generated_text=generated_text,
+                use_last_n_layers=4,
+            )
+            if heatmap is None:
+                return {"error": "compute_attention_heatmap returned None"}
+
+            # 產生疊加圖（BGR numpy → base64 PNG 供 GUI 解碼）
+            import io as _io, base64 as _b64
+            from PIL import Image as _PIL
+            import cv2 as _cv2
+            images_b64 = params.get("images", [])
+            if images_b64:
+                from point.mm_utils import load_image_from_base64
+                pil_img = load_image_from_base64(images_b64[0]).convert("RGB")
+            else:
+                pil_img = None
+
+            if pil_img is not None:
+                # 嘗試從 generated_text 解析 keypoint
+                import re
+                m = re.search(r"\(\s*([\d.]+)\s*,\s*([\d.]+)\s*\)", generated_text)
+                kp = (float(m.group(1)), float(m.group(2))) if m else None
+                overlay_bgr = render_attention_overlay(pil_img, heatmap, kp)
+                _, buf = _cv2.imencode(".png", overlay_bgr)
+                overlay_b64 = _b64.b64encode(buf).decode()
+            else:
+                overlay_b64 = None
+
+            return {
+                "heatmap": heatmap.tolist(),
+                "grid_h":  int(heatmap.shape[0]),
+                "grid_w":  int(heatmap.shape[1]),
+                "overlay_png_b64": overlay_b64,
+                "summary": heatmap_to_text(
+                    heatmap,
+                    image_size=pil_img.size if pil_img is not None else None,
+                ),
+                "error": None,
+            }
+        except Exception as exc:
+            import traceback
+            logger.error(f"[XAI] generate_attention_heatmap error: {exc}")
+            return {"error": str(exc), "traceback": traceback.format_exc()}
 
     def generate_stream_gate(self, params):
         try:
@@ -248,6 +372,68 @@ async def get_status(request: Request):
     return worker.get_status()
 
 
+# ---------------------------------------------------------------------------
+# XAI: Attention-based Explainability endpoint
+# ---------------------------------------------------------------------------
+
+@app.post("/worker_explain_attention")
+async def worker_explain_attention(request: Request):
+    """
+    使用 Attention Heatmap 方法解釋「為什麼預測這個 keypoint」。
+
+    Request body（JSON）:
+      - 所有 /worker_generate_stream 的欄位（prompt, images, model, ...）
+      - generated_text   : str  **僅**模型產生的座標文字（e.g. "[(0.45, 0.32)]"）
+                           注意：不要包含 prompt！只傳模型新生成的部分。
+
+    Response（JSON）:
+      {
+        "heatmap": [[...], ...],        # (grid_h, grid_w) float [0,1]
+        "grid_h": 24,
+        "grid_w": 24,
+        "overlay_png_b64": "...",       # 熱力圖疊加原圖，base64 PNG
+        "summary": "...",               # 文字摘要
+        "error": null
+      }
+    """
+    global model_semaphore, global_counter
+    global_counter += 1
+    params = await request.json()
+
+    generated_text = params.pop("generated_text", "")
+
+    if not generated_text:
+        return JSONResponse({"error": "generated_text is required"})
+
+    # 安全檢查：如果 generated_text 包含了 prompt，自動去除 prompt prefix
+    prompt = params.get("prompt", "")
+    if prompt and generated_text.startswith(prompt):
+        logger.warning("[XAI] generated_text contains prompt prefix, stripping it")
+        generated_text = generated_text[len(prompt):].strip()
+
+    # 取得 semaphore
+    if model_semaphore is None:
+        model_semaphore = asyncio.Semaphore(args.limit_model_concurrency)
+    await model_semaphore.acquire()
+    worker.send_heart_beat()
+
+    try:
+        # 在 threadpool 裡跑（避免阻塞 event loop）
+        loop = asyncio.get_running_loop()
+        import concurrent.futures as _futures
+        with _futures.ThreadPoolExecutor(max_workers=1) as pool:
+            result = await loop.run_in_executor(
+                pool,
+                lambda: worker.generate_attention_heatmap(
+                    params, generated_text
+                )
+            )
+        return JSONResponse(result)
+    finally:
+        model_semaphore.release()
+        worker.send_heart_beat()
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--host", type=str, default="0.0.0.0")
@@ -256,7 +442,7 @@ if __name__ == "__main__":
         default="http://10.0.0.1:22000")
     parser.add_argument("--controller-address", type=str,
         default="http://10.0.0.1:11000")
-    parser.add_argument("--model-path", type=str, default="wentao-yuan/robopoint-v1-vicuna-v1.5-13b")
+    parser.add_argument("--model-path", type=str, default="PME033541/vla13")
     parser.add_argument("--model-base", type=str, default=None)
     parser.add_argument("--model-name", type=str)
     parser.add_argument("--device", type=str, default="cuda")
@@ -267,6 +453,10 @@ if __name__ == "__main__":
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--use-flash-attn", action="store_true")
+    parser.add_argument("--mm-use-canny-edge", type=str2bool, default=False)
+    parser.add_argument("--mm-canny-low-threshold", type=int, default=100)
+    parser.add_argument("--mm-canny-high-threshold", type=int, default=200)
+    parser.add_argument("--mm-canny-blend-alpha", type=float, default=0.2)
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
@@ -283,5 +473,9 @@ if __name__ == "__main__":
                          args.load_8bit,
                          args.load_4bit,
                          args.device,
-                         use_flash_attn=args.use_flash_attn)
+                         use_flash_attn=args.use_flash_attn,
+                         mm_use_canny_edge=args.mm_use_canny_edge,
+                         mm_canny_low_threshold=args.mm_canny_low_threshold,
+                         mm_canny_high_threshold=args.mm_canny_high_threshold,
+                         mm_canny_blend_alpha=args.mm_canny_blend_alpha)
     uvicorn.run(app, host=args.host, port=args.port, log_level="info")
