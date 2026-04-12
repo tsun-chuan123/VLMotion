@@ -2,9 +2,7 @@ import datetime
 import logging
 import logging.handlers
 import os
-import re
 import sys
-import warnings
 
 import requests
 
@@ -14,56 +12,6 @@ server_error_msg = "**NETWORK ERROR DUE TO HIGH TRAFFIC. PLEASE REGENERATE OR RE
 moderation_msg = "YOUR INPUT VIOLATES OUR CONTENT MODERATION GUIDELINES. PLEASE TRY AGAIN."
 
 handler = None
-
-_NOISY_LINE_PATTERNS = [
-    re.compile(r"HTTP Request:\\s"),
-    re.compile(r"LOAD REPORT from:"),
-    re.compile(r"\\|\\s+UNEXPECTED\\s+\\|"),
-    re.compile(r"^Notes:$"),
-    re.compile(r"^-\\s+UNEXPECTED:"),
-    re.compile(r"The following generation flags are not valid and may be ignored"),
-]
-
-
-def _should_suppress_log_line(line: str) -> bool:
-    text = line.strip()
-    if not text:
-        return True
-    return any(pattern.search(text) for pattern in _NOISY_LINE_PATTERNS)
-
-
-def _configure_third_party_logging():
-    """Reduce verbose dependency logs in worker output."""
-    # Keep hub/model logs quiet unless there is a real warning/error.
-    os.environ.setdefault("HF_HUB_VERBOSITY", "error")
-    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
-
-    # Suppress noisy informational HTTP traces and model load summaries.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
-    logging.getLogger("urllib3").setLevel(logging.WARNING)
-    logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
-    logging.getLogger("transformers").setLevel(logging.ERROR)
-
-    # Keep uvicorn lifecycle logs visible (startup/shutdown/bind address).
-    uvicorn_logger = logging.getLogger("uvicorn")
-    uvicorn_logger.setLevel(logging.INFO)
-    uvicorn_logger.propagate = True
-    uvicorn_error_logger = logging.getLogger("uvicorn.error")
-    uvicorn_error_logger.setLevel(logging.INFO)
-    uvicorn_error_logger.propagate = True
-
-    try:
-        from transformers.utils import logging as transformers_logging
-        transformers_logging.set_verbosity_error()
-    except Exception:
-        pass
-
-    warnings.filterwarnings(
-        "ignore",
-        message=r".*_check_is_size will be removed in a future PyTorch release.*",
-        category=FutureWarning,
-    )
 
 
 def build_logger(logger_name, logger_filename):
@@ -79,8 +27,6 @@ def build_logger(logger_name, logger_filename):
         logging.basicConfig(level=logging.INFO)
     logging.getLogger().handlers[0].setFormatter(formatter)
 
-    _configure_third_party_logging()
-
     # Redirect stdout and stderr to loggers
     stdout_logger = logging.getLogger("stdout")
     stdout_logger.setLevel(logging.INFO)
@@ -88,8 +34,7 @@ def build_logger(logger_name, logger_filename):
     sys.stdout = sl
 
     stderr_logger = logging.getLogger("stderr")
-    # Keep stderr channel open to INFO so remapped uvicorn INFO lines are visible.
-    stderr_logger.setLevel(logging.INFO)
+    stderr_logger.setLevel(logging.ERROR)
     sl = StreamToLogger(stderr_logger, logging.ERROR)
     sys.stderr = sl
 
@@ -126,9 +71,7 @@ class StreamToLogger(object):
         return getattr(self.terminal, attr)
 
     def write(self, buf):
-        # tqdm/HF progress bars update with '\r' instead of '\n'.
-        # Treat carriage returns as line breaks so progress updates are visible.
-        temp_linebuf = (self.linebuf + buf).replace('\r', '\n')
+        temp_linebuf = self.linebuf + buf
         self.linebuf = ''
         for line in temp_linebuf.splitlines(True):
             # From the io.TextIOWrapper docs:
@@ -137,30 +80,13 @@ class StreamToLogger(object):
             # By default sys.stdout.write() expects '\n' newlines and then
             # translates them so this is still cross platform.
             if line[-1] == '\n':
-                if not _should_suppress_log_line(line):
-                    level = self.log_level
-                    # uvicorn often writes INFO lines to stderr; keep severity meaningful.
-                    if self.log_level >= logging.ERROR and line.lstrip().startswith("INFO:"):
-                        level = logging.INFO
-                    self.logger.log(level, line.rstrip())
+                self.logger.log(self.log_level, line.rstrip())
             else:
-                # Keep partial stderr output visible to avoid losing fatal errors at process exit.
-                if self.log_level >= logging.ERROR:
-                    if not _should_suppress_log_line(line):
-                        level = self.log_level
-                        if line.lstrip().startswith("INFO:"):
-                            level = logging.INFO
-                        self.logger.log(level, line.rstrip())
-                else:
-                    self.linebuf += line
+                self.linebuf += line
 
     def flush(self):
         if self.linebuf != '':
-            if not _should_suppress_log_line(self.linebuf):
-                level = self.log_level
-                if self.log_level >= logging.ERROR and self.linebuf.lstrip().startswith("INFO:"):
-                    level = logging.INFO
-                self.logger.log(level, self.linebuf.rstrip())
+            self.logger.log(self.log_level, self.linebuf.rstrip())
         self.linebuf = ''
 
 

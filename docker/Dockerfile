@@ -110,7 +110,7 @@ RUN pip3 install 'pip<25' 'setuptools<80,>=68' 'wheel>=0.40' 'packaging>=24.0' &
     pip3 install -c /tmp/constraints.txt --index-url https://download.pytorch.org/whl/cu128 \
       torch torchvision torchaudio && \
     pip3 install -c /tmp/constraints.txt \
-      transformers \
+      transformers==4.56.1 \
       accelerate \
       bitsandbytes \
       soundfile \
