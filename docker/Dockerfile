@@ -115,7 +115,12 @@ RUN pip3 install 'pip<25' 'setuptools<80,>=68' 'wheel>=0.40' 'packaging>=24.0' &
       bitsandbytes \
       soundfile \
       ultralytics \
-      urchin
+      urchin \
+      iopath \
+      timm \
+      ftfy==6.1.1 \
+      einops \
+      pycocotools
 
 WORKDIR /workspace
 
@@ -137,6 +142,8 @@ RUN pip3 install -c /tmp/constraints.txt \
     fastapi==0.112.4 \
     uvicorn[standard] \
     gradio==4.16.0 \
+    scikit-image \
+    scikit-learn \
     PyQt5>=5.15.0
 
 # Keep container alive for interactive work (no extra shell)
