@@ -12,12 +12,19 @@ def generate_launch_description():
     device = LaunchConfiguration('device')
     limit_model_concurrency = LaunchConfiguration('limit_model_concurrency')
     stream_interval = LaunchConfiguration('stream_interval')
-    mm_use_canny_edge = LaunchConfiguration('mm_use_canny_edge')
-    mm_canny_low_threshold = LaunchConfiguration('mm_canny_low_threshold')
-    mm_canny_high_threshold = LaunchConfiguration('mm_canny_high_threshold')
-    mm_canny_blend_alpha = LaunchConfiguration('mm_canny_blend_alpha')
+    mm_use_sam3_conditioning = LaunchConfiguration('mm_use_sam3_conditioning')
+    mm_sam3_vision_tower = LaunchConfiguration('mm_sam3_vision_tower')
+    mm_sam3_blend_alpha = LaunchConfiguration('mm_sam3_blend_alpha')
+    mm_sam3_mask_gamma = LaunchConfiguration('mm_sam3_mask_gamma')
+    mm_sam3_device = LaunchConfiguration('mm_sam3_device')
+    mm_sam3_dtype = LaunchConfiguration('mm_sam3_dtype')
+    mm_sam3_unload_after_forward = LaunchConfiguration('mm_sam3_unload_after_forward')
+    sam3_detect_device = LaunchConfiguration('sam3_detect_device')
+    sam3_detect_dtype = LaunchConfiguration('sam3_detect_dtype')
 
-    set_env = SetEnvironmentVariable('PYTHONUNBUFFERED', '1')
+    set_unbuffered = SetEnvironmentVariable('PYTHONUNBUFFERED', '1')
+    set_cuda_alloc = SetEnvironmentVariable(
+        'PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
 
     worker_cmd = ExecuteProcess(
         cmd=[
@@ -30,10 +37,15 @@ def generate_launch_description():
             '--device', device,
             '--limit-model-concurrency', limit_model_concurrency,
             '--stream-interval', stream_interval,
-            '--mm-use-canny-edge', mm_use_canny_edge,
-            '--mm-canny-low-threshold', mm_canny_low_threshold,
-            '--mm-canny-high-threshold', mm_canny_high_threshold,
-            '--mm-canny-blend-alpha', mm_canny_blend_alpha,
+            '--mm-use-sam3-conditioning', mm_use_sam3_conditioning,
+            '--mm-sam3-vision-tower', mm_sam3_vision_tower,
+            '--mm-sam3-blend-alpha', mm_sam3_blend_alpha,
+            '--mm-sam3-mask-gamma', mm_sam3_mask_gamma,
+            '--mm-sam3-device', mm_sam3_device,
+            '--mm-sam3-dtype', mm_sam3_dtype,
+            '--mm-sam3-unload-after-forward', mm_sam3_unload_after_forward,
+            '--sam3-detect-device', sam3_detect_device,
+            '--sam3-detect-dtype', sam3_detect_dtype,
             '--load-4bit',
         ],
         name='vlpoint_worker',
@@ -49,10 +61,16 @@ def generate_launch_description():
         DeclareLaunchArgument('device', default_value='cuda'),
         DeclareLaunchArgument('limit_model_concurrency', default_value='5'),
         DeclareLaunchArgument('stream_interval', default_value='1'),
-        DeclareLaunchArgument('mm_use_canny_edge', default_value='true'),
-        DeclareLaunchArgument('mm_canny_low_threshold', default_value='100'),
-        DeclareLaunchArgument('mm_canny_high_threshold', default_value='200'),
-        DeclareLaunchArgument('mm_canny_blend_alpha', default_value='0.2'),
-        set_env,
+        DeclareLaunchArgument('mm_use_sam3_conditioning', default_value='true'),
+        DeclareLaunchArgument('mm_sam3_vision_tower', default_value='facebook/sam3'),
+        DeclareLaunchArgument('mm_sam3_blend_alpha', default_value='0.35'),
+        DeclareLaunchArgument('mm_sam3_mask_gamma', default_value='1.0'),
+        DeclareLaunchArgument('mm_sam3_device', default_value='cuda'),
+        DeclareLaunchArgument('mm_sam3_dtype', default_value='bfloat16'),
+        DeclareLaunchArgument('mm_sam3_unload_after_forward', default_value='true'),
+        DeclareLaunchArgument('sam3_detect_device', default_value='cuda'),
+        DeclareLaunchArgument('sam3_detect_dtype', default_value='bfloat16'),
+        set_unbuffered,
+        set_cuda_alloc,
         worker_cmd,
     ])
