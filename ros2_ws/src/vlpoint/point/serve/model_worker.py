@@ -684,6 +684,8 @@ def rejects_direction(det, direction):
     if crop_role == "other":
         return True
     opposite = "up" if direction == "down" else "down"
+    if det.get("vertical_role") == direction:
+        return False
     return crop_role == opposite and crop_confidence >= 0.25
 
 
