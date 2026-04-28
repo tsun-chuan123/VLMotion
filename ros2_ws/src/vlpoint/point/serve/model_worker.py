@@ -26,6 +26,7 @@ from point.mm_utils import process_images, load_image_from_base64, tokenizer_ima
 from point.constants import IMAGE_TOKEN_INDEX, DEFAULT_IMAGE_TOKEN, DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN
 from transformers import TextIteratorStreamer
 from threading import Thread
+from PIL import ImageDraw
 
 
 GB = 1 << 30
@@ -89,6 +90,59 @@ def resolve_dtype(dtype_name, device):
     if dtype_name in ("fp16", "float16", "half"):
         return torch.float16
     raise ValueError(f"Unsupported dtype: {dtype_name}")
+
+
+def draw_sam3_detections(img, detections, out_path):
+    if not out_path or not detections:
+        return
+
+    vis = img.copy().convert("RGB")
+    draw = ImageDraw.Draw(vis)
+    width, height = vis.size
+    center_radius = max(4, int(min(width, height) * 0.012))
+    line_width = max(2, int(min(width, height) * 0.004))
+
+    for det in detections:
+        x1, y1, x2, y2 = det["box"]
+        label = det["label"]
+        score = det["score"]
+        cx_norm, cy_norm = det["center"]
+        cx = int(round(cx_norm * width))
+        cy = int(round(cy_norm * height))
+
+        draw.rectangle([x1, y1, x2, y2], outline="lime", width=line_width)
+        draw.line(
+            [cx - center_radius, cy, cx + center_radius, cy],
+            fill="yellow",
+            width=line_width,
+        )
+        draw.line(
+            [cx, cy - center_radius, cx, cy + center_radius],
+            fill="yellow",
+            width=line_width,
+        )
+        draw.ellipse(
+            [
+                cx - center_radius,
+                cy - center_radius,
+                cx + center_radius,
+                cy + center_radius,
+            ],
+            outline="yellow",
+            width=line_width,
+        )
+        draw.text((x1 + 3, max(0, y1 - 14)), f"{label} {score:.2f}", fill="lime")
+
+    vis.save(out_path)
+    print(f"Saved SAM3 detections: {out_path}")
+
+
+def append_to_last_user_turn(prompt: str, text: str) -> str:
+    for marker in (" ASSISTANT:", "\nASSISTANT:", "Assistant:"):
+        idx = prompt.rfind(marker)
+        if idx != -1:
+            return prompt[:idx] + text + prompt[idx:]
+    return prompt + text
 
 
 def detect_sam3_candidates(img, args):
@@ -158,6 +212,8 @@ def detect_sam3_candidates(img, args):
             f"center=({cx:.3f}, {cy:.3f}), "
             f"box=({x1:.1f}, {y1:.1f}, {x2:.1f}, {y2:.1f})"
         )
+
+    draw_sam3_detections(img, detections, args.sam3_detections_out_path)
 
     del model
     if device.type == "cuda":
@@ -356,12 +412,35 @@ class ModelWorker:
                         candidate_lines.append(
                             f"{det['label']}: center=({cx:.3f}, {cy:.3f}), score={det['score']:.3f}"
                         )
-                    prompt += (
+                    if args.sam3_max_points == 1:
+                        format_suffix = "\nAnswer with exactly one candidate label only, e.g. A."
+                    else:
+                        format_suffix = (
+                            f"\nAnswer with at most {args.sam3_max_points} candidate labels only, "
+                            "e.g. A, C."
+                        )
+                    prompt = append_to_last_user_turn(prompt, (
                         "\nSAM3 found these candidate buttons:\n"
                         + "\n".join(candidate_lines)
                         + "\nYou must choose only from the SAM3 candidate labels above. "
                         "Do not invent a new coordinate."
-                    )
+                        + format_suffix
+                    ))
+                elif args.sam3_max_points == 1:
+                    prompt = append_to_last_user_turn(prompt, (
+                        "\nChoose the single best point only. "
+                        "Your answer must be formatted as exactly one tuple, i.e. (x, y), "
+                        "where x and y are normalized coordinates between 0 and 1."
+                    ))
+                else:
+                    prompt = append_to_last_user_turn(prompt, (
+                        f"\nChoose at most {args.sam3_max_points} points. "
+                        "Your answer should be formatted as a list of tuples, "
+                        "i.e. [(x1, y1), (x2, y2), ...], where each tuple contains "
+                        "the x and y coordinates of a point satisfying the conditions above. "
+                        "The coordinates should be between 0 and 1, indicating the normalized "
+                        "pixel locations of the points in the image."
+                    ))
 
                 num_image_tokens = prompt.count(replace_token) * model.get_vision_tower().num_patches
             else:
@@ -452,12 +531,14 @@ class ModelWorker:
             raise generation_error[0]
 
         completion_text = generated_text[len(ori_prompt):]
+        print(f"Model raw output: {completion_text!r}")
+        response_text = completion_text
 
         if sam3_candidates:
             label_to_coord = {det["label"]: det["center"] for det in sam3_candidates}
-            selected_labels = parse_candidate_labels(generated_text, label_to_coord.keys())
+            selected_labels = parse_candidate_labels(completion_text, label_to_coord.keys())
+            generated_coords = parse_coords(completion_text)
             if not selected_labels:
-                generated_coords = parse_coords(generated_text)
                 selected_labels = snap_coords_to_candidates(
                     generated_coords,
                     sam3_candidates,
@@ -472,10 +553,23 @@ class ModelWorker:
             if args.sam3_max_points > 0:
                 selected_labels = selected_labels[:args.sam3_max_points]
             coords = [label_to_coord[label] for label in selected_labels]
-            completion_text = str([(round(nx, 4), round(ny, 4)) for nx, ny in coords])
+            if not generated_coords and selected_labels:
+                response_text = ", ".join(
+                    f"({round(nx, 4)}, {round(ny, 4)})"
+                    for nx, ny in coords
+                )
+            elif generated_coords and selected_labels:
+                snapped_points = [
+                    (round(nx, 4), round(ny, 4))
+                    for nx, ny in coords
+                ]
+                response_text = (
+                    f"{completion_text}\n"
+                    f"__SNAPPED_POINTS__:{json.dumps(snapped_points)}"
+                )
             print(f"Selected SAM3 labels: {selected_labels}")
 
-        yield json.dumps({"text": ori_prompt + completion_text, "error_code": 0}).encode() + b"\0"
+        yield json.dumps({"text": ori_prompt + response_text, "error_code": 0}).encode() + b"\0"
 
     def generate_stream_gate(self, params):
         try:
@@ -567,6 +661,7 @@ if __name__ == "__main__":
     parser.add_argument("--sam3-max-points", type=int, default=4)
     parser.add_argument("--sam3-detect-device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--sam3-detect-dtype", type=str, default="bfloat16")
+    parser.add_argument("--sam3-detections-out-path", type=str, default="/workspace/sam3_worker_candidates.jpg")
     args = parser.parse_args()
     logger.info(f"args: {args}")
 
