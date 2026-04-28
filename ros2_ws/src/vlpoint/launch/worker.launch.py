@@ -21,6 +21,7 @@ def generate_launch_description():
     mm_sam3_unload_after_forward = LaunchConfiguration('mm_sam3_unload_after_forward')
     sam3_detect_device = LaunchConfiguration('sam3_detect_device')
     sam3_detect_dtype = LaunchConfiguration('sam3_detect_dtype')
+    sam3_max_candidates = LaunchConfiguration('sam3_max_candidates')
     sam3_detections_out_path = LaunchConfiguration('sam3_detections_out_path')
 
     set_unbuffered = SetEnvironmentVariable('PYTHONUNBUFFERED', '1')
@@ -47,6 +48,7 @@ def generate_launch_description():
             '--mm-sam3-unload-after-forward', mm_sam3_unload_after_forward,
             '--sam3-detect-device', sam3_detect_device,
             '--sam3-detect-dtype', sam3_detect_dtype,
+            '--sam3-max-candidates', sam3_max_candidates,
             '--sam3-detections-out-path', sam3_detections_out_path,
             '--load-4bit',
         ],
@@ -72,6 +74,7 @@ def generate_launch_description():
         DeclareLaunchArgument('mm_sam3_unload_after_forward', default_value='true'),
         DeclareLaunchArgument('sam3_detect_device', default_value='cuda'),
         DeclareLaunchArgument('sam3_detect_dtype', default_value='bfloat16'),
+        DeclareLaunchArgument('sam3_max_candidates', default_value='12'),
         DeclareLaunchArgument('sam3_detections_out_path', default_value='/workspace/sam3_worker_candidates.jpg'),
         set_unbuffered,
         set_cuda_alloc,
