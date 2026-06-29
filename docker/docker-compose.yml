@@ -24,7 +24,10 @@ services:
       - /dev/video3:/dev/video3:rw  # 第四攝影機（如果有）
       - /dev/video4:/dev/video4:rw  # 第五攝影機（如果有）
       - /dev/video5:/dev/video5:rw  # 第六攝影機（如果有）
-    network_mode: "host"
+    ports:
+      - "11000:11000"
+      - "22000:22000"
+      - "9090:9090"
     privileged: true
     devices:
       - /dev/video0:/dev/video0  # 主攝影機

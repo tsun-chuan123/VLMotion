@@ -98,7 +98,7 @@ RUN printf '%s\n' "if [ -f ~/.bashrc ]; then" \
 
 # Python deps
 # - 先行安裝 triton 依賴：sympy / mpmath，避免卸載 apt 版 sympy 失敗
-# - Torch 使用 CUDA 12.1 的輪檔
+# - Torch 使用 CUDA 12.4 的輪檔
 # - Transformers 與影像處理相關套件
 RUN pip3 install 'pip<25' 'setuptools<80,>=68' 'wheel>=0.40' 'packaging>=24.0' && \
     # 以 constraints 鎖定 numpy<2，避免後續安裝升級為 2.x

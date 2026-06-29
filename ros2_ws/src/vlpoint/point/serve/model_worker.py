@@ -876,8 +876,14 @@ def detect_sam3_candidates(img, args):
         f"dtype={dtype}"
     )
 
-    processor = Sam3Processor.from_pretrained(tower_name)
-    model = Sam3Model.from_pretrained(tower_name)
+    processor = Sam3Processor.from_pretrained(
+        tower_name,
+        local_files_only=args.local_files_only,
+    )
+    model = Sam3Model.from_pretrained(
+        tower_name,
+        local_files_only=args.local_files_only,
+    )
     model.requires_grad_(False)
     model.eval()
     model.to(device=device, dtype=dtype)
@@ -983,7 +989,8 @@ class ModelWorker:
                  mm_sam3_mask_gamma=1.0,
                  mm_sam3_device="cpu",
                  mm_sam3_dtype="auto",
-                 mm_sam3_unload_after_forward=False):
+                 mm_sam3_unload_after_forward=False,
+                 local_files_only=False):
         self.controller_addr = controller_addr
         self.worker_addr = worker_addr
         self.worker_id = worker_id
@@ -1002,7 +1009,9 @@ class ModelWorker:
         logger.info(f"Loading the model {self.model_name} on worker {worker_id} ...")
         load_start = time.time()
         self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
-            model_path, model_base, self.model_name, load_8bit, load_4bit, device=self.device, use_flash_attn=use_flash_attn)
+            model_path, model_base, self.model_name, load_8bit, load_4bit,
+            device=self.device, use_flash_attn=use_flash_attn,
+            local_files_only=local_files_only)
         load_elapsed = time.time() - load_start
         logger.info(
             "Model load completed in "
@@ -1435,9 +1444,9 @@ if __name__ == "__main__":
     parser.add_argument("--host", type=str, default="0.0.0.0")
     parser.add_argument("--port", type=int, default=22000)
     parser.add_argument("--worker-address", type=str,
-        default="http://10.0.0.1:22000")
+        default="http://192.168.0.70:22000")
     parser.add_argument("--controller-address", type=str,
-        default="http://10.0.0.1:11000")
+        default="http://192.168.0.70:11000")
     parser.add_argument("--model-path", type=str, default="PME033541/vla13")
     parser.add_argument("--model-base", type=str, default=None)
     parser.add_argument("--model-name", type=str)
@@ -1449,6 +1458,7 @@ if __name__ == "__main__":
     parser.add_argument("--load-8bit", action="store_true")
     parser.add_argument("--load-4bit", action="store_true")
     parser.add_argument("--use-flash-attn", action="store_true")
+    parser.add_argument("--local-files-only", type=str2bool, default=False)
     parser.add_argument("--mm-use-sam3-conditioning", type=str2bool, default=True)
     parser.add_argument("--mm-sam3-vision-tower", type=str, default="facebook/sam3")
     parser.add_argument("--mm-sam3-blend-alpha", type=float, default=0.35)
@@ -1487,7 +1497,8 @@ if __name__ == "__main__":
                          mm_sam3_mask_gamma=args.mm_sam3_mask_gamma,
                          mm_sam3_device=args.mm_sam3_device,
                          mm_sam3_dtype=args.mm_sam3_dtype,
-                         mm_sam3_unload_after_forward=args.mm_sam3_unload_after_forward)
+                         mm_sam3_unload_after_forward=args.mm_sam3_unload_after_forward,
+                         local_files_only=args.local_files_only)
     if not args.no_register:
         worker.register_to_controller()
         heart_beat_thread = threading.Thread(

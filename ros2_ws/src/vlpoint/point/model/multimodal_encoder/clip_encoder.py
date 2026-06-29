@@ -1,9 +1,14 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import warnings
 
 from transformers import CLIPVisionModel, CLIPImageProcessor, CLIPVisionConfig
+
+
+def _env_flag_enabled(name):
+    return os.environ.get(name, "").strip().upper() in ("1", "ON", "YES", "TRUE")
 
 
 class CLIPVisionTower(nn.Module):
@@ -22,6 +27,11 @@ class CLIPVisionTower(nn.Module):
         self.mm_sam3_device = getattr(args, 'mm_sam3_device', 'cpu')
         self.mm_sam3_dtype = getattr(args, 'mm_sam3_dtype', 'auto')
         self.mm_sam3_unload_after_forward = getattr(args, 'mm_sam3_unload_after_forward', False)
+        self.local_files_only = bool(
+            getattr(args, 'local_files_only', False)
+            or _env_flag_enabled("HF_HUB_OFFLINE")
+            or _env_flag_enabled("TRANSFORMERS_OFFLINE")
+        )
         self.sam3_is_loaded = False
 
         if not delay_load:
@@ -29,7 +39,10 @@ class CLIPVisionTower(nn.Module):
         elif getattr(args, 'unfreeze_mm_vision_tower', False):
             self.load_model()
         else:
-            self.cfg_only = CLIPVisionConfig.from_pretrained(self.vision_tower_name)
+            self.cfg_only = CLIPVisionConfig.from_pretrained(
+                self.vision_tower_name,
+                local_files_only=self.local_files_only,
+            )
 
     def load_sam3_model(self):
         if self.sam3_is_loaded:
@@ -48,8 +61,14 @@ class CLIPVisionTower(nn.Module):
                 "mm_use_sam3_conditioning=True."
             ) from exc
 
-        self.sam3_image_processor = Sam3ImageProcessor.from_pretrained(self.mm_sam3_vision_tower)
-        sam3_model = Sam3Model.from_pretrained(self.mm_sam3_vision_tower)
+        self.sam3_image_processor = Sam3ImageProcessor.from_pretrained(
+            self.mm_sam3_vision_tower,
+            local_files_only=self.local_files_only,
+        )
+        sam3_model = Sam3Model.from_pretrained(
+            self.mm_sam3_vision_tower,
+            local_files_only=self.local_files_only,
+        )
         self.sam3_vision_tower = sam3_model.vision_encoder
         del sam3_model
         self.sam3_vision_tower.requires_grad_(False)
@@ -168,8 +187,15 @@ class CLIPVisionTower(nn.Module):
             print('{} is already loaded, `load_model` called again, skipping.'.format(self.vision_tower_name))
             return
 
-        self.image_processor = CLIPImageProcessor.from_pretrained(self.vision_tower_name)
-        self.vision_tower = CLIPVisionModel.from_pretrained(self.vision_tower_name, device_map=device_map)
+        self.image_processor = CLIPImageProcessor.from_pretrained(
+            self.vision_tower_name,
+            local_files_only=self.local_files_only,
+        )
+        self.vision_tower = CLIPVisionModel.from_pretrained(
+            self.vision_tower_name,
+            device_map=device_map,
+            local_files_only=self.local_files_only,
+        )
         self.vision_tower.requires_grad_(False)
 
         self.is_loaded = True

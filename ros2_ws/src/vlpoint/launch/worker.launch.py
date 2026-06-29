@@ -9,6 +9,7 @@ def generate_launch_description():
     controller_address = LaunchConfiguration('controller_address')
     worker_address = LaunchConfiguration('worker_address')
     model_path = LaunchConfiguration('model_path')
+    offline_models = LaunchConfiguration('offline_models')
     device = LaunchConfiguration('device')
     limit_model_concurrency = LaunchConfiguration('limit_model_concurrency')
     stream_interval = LaunchConfiguration('stream_interval')
@@ -27,6 +28,8 @@ def generate_launch_description():
     set_unbuffered = SetEnvironmentVariable('PYTHONUNBUFFERED', '1')
     set_cuda_alloc = SetEnvironmentVariable(
         'PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+    set_hf_hub_offline = SetEnvironmentVariable('HF_HUB_OFFLINE', offline_models)
+    set_transformers_offline = SetEnvironmentVariable('TRANSFORMERS_OFFLINE', offline_models)
 
     worker_cmd = ExecuteProcess(
         cmd=[
@@ -36,6 +39,7 @@ def generate_launch_description():
             '--worker-address', worker_address,
             '--controller-address', controller_address,
             '--model-path', model_path,
+            '--local-files-only', offline_models,
             '--device', device,
             '--limit-model-concurrency', limit_model_concurrency,
             '--stream-interval', stream_interval,
@@ -59,9 +63,10 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('worker_host', default_value='0.0.0.0'),
         DeclareLaunchArgument('worker_port', default_value='22000'),
-        DeclareLaunchArgument('controller_address', default_value='http://10.0.0.1:11000'),
-        DeclareLaunchArgument('worker_address', default_value='http://10.0.0.1:22000'),
+        DeclareLaunchArgument('controller_address', default_value='http://192.168.0.70:11000'),
+        DeclareLaunchArgument('worker_address', default_value='http://192.168.0.70:22000'),
         DeclareLaunchArgument('model_path', default_value='PME033541/vla13'),
+        DeclareLaunchArgument('offline_models', default_value='1'),
         DeclareLaunchArgument('device', default_value='cuda'),
         DeclareLaunchArgument('limit_model_concurrency', default_value='5'),
         DeclareLaunchArgument('stream_interval', default_value='1'),
@@ -78,5 +83,7 @@ def generate_launch_description():
         DeclareLaunchArgument('sam3_detections_out_path', default_value='/workspace/sam3_worker_candidates.jpg'),
         set_unbuffered,
         set_cuda_alloc,
+        set_hf_hub_offline,
+        set_transformers_offline,
         worker_cmd,
     ])
